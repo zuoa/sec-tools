@@ -1,4 +1,4 @@
-import psycopg2
+import mysql.connector
 import socket
 import sys
 import ipaddress
@@ -8,17 +8,16 @@ from contextlib import contextmanager
 import time
 
 
-class PostgreSQLNetworkTester:
-    def __init__(self, port=5432, database='postgres', timeout=3, max_threads=50):
+class MySQLNetworkTester:
+    def __init__(self, port=3306, timeout=3, max_threads=50):
         self.port = port
-        self.database = database
         self.timeout = timeout
         self.max_threads = max_threads
         self.found_services = []
         self.lock = threading.Lock()
 
     def scan_host_port(self, host):
-        """扫描单个主机的PostgreSQL端口"""
+        """扫描单个主机的MySQL端口"""
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(self.timeout)
@@ -28,14 +27,14 @@ class PostgreSQLNetworkTester:
             if result == 0:
                 with self.lock:
                     self.found_services.append(host)
-                    print(f"✓ 发现PostgreSQL服务: {host}:{self.port}")
+                    print(f"✓ 发现MySQL服务: {host}:{self.port}")
                 return True
             return False
         except Exception:
             return False
 
     def scan_network_range(self, network_range):
-        """扫描网络范围内的PostgreSQL服务"""
+        """扫描网络范围内的MySQL服务"""
         print(f"开始扫描网段: {network_range}")
         print(f"端口: {self.port}, 超时: {self.timeout}秒, 线程数: {self.max_threads}")
         print("-" * 60)
@@ -55,7 +54,7 @@ class PostgreSQLNetworkTester:
                     if completed % 50 == 0:
                         print(f"已扫描: {completed}/{len(hosts)}")
 
-            print(f"\n扫描完成! 找到 {len(self.found_services)} 个PostgreSQL服务")
+            print(f"\n扫描完成! 找到 {len(self.found_services)} 个MySQL服务")
             return self.found_services
 
         except ValueError as e:
@@ -63,28 +62,52 @@ class PostgreSQLNetworkTester:
             return []
 
     def test_single_connection(self, host, username, password):
-        """测试单个主机的认证"""
+        """测试单个主机的MySQL认证"""
         try:
-            conn = psycopg2.connect(
+            conn = mysql.connector.connect(
                 host=host,
                 port=self.port,
-                database=self.database,
                 user=username,
                 password=password,
-                connect_timeout=self.timeout
+                connection_timeout=self.timeout,
+                autocommit=True
             )
             conn.close()
             return True
-        except psycopg2.OperationalError as e:
-            error_msg = str(e).lower()
-            if "authentication failed" in error_msg or "password authentication failed" in error_msg:
+        except mysql.connector.Error as e:
+            error_code = e.errno
+            # 1045: Access denied (密码错误)
+            # 1049: Unknown database (认证成功但数据库不存在)
+            # 2003: Can't connect to MySQL server
+            # 2013: Lost connection to MySQL server
+            if error_code == 1045:  # Access denied
                 return False
-            elif "database" in error_msg and "does not exist" in error_msg:
-                return True  # 认证成功但数据库不存在
+            elif error_code == 1049:  # Unknown database - 认证成功
+                return True
             else:
                 return False
         except Exception:
             return False
+
+    def get_mysql_version(self, host, username, password):
+        """获取MySQL版本信息"""
+        try:
+            conn = mysql.connector.connect(
+                host=host,
+                port=self.port,
+                user=username,
+                password=password,
+                connection_timeout=self.timeout,
+                autocommit=True
+            )
+            cursor = conn.cursor()
+            cursor.execute("SELECT VERSION()")
+            version = cursor.fetchone()[0]
+            cursor.close()
+            conn.close()
+            return version
+        except Exception:
+            return "Unknown"
 
     def load_password_dictionary(self, dict_file):
         """从文件加载密码字典"""
@@ -112,7 +135,7 @@ class PostgreSQLNetworkTester:
                 combinations.append((username, password))
         return combinations
 
-    def test_credentials_limited(self, hosts, credential_list, max_attempts_per_host=10):
+    def test_credentials_limited(self, hosts, credential_list, max_attempts_per_host=15):
         """测试凭据（限制尝试次数以防止滥用）"""
         print(f"\n开始测试 {len(hosts)} 个主机的认证...")
         print(f"每个主机最多尝试 {max_attempts_per_host} 个凭据")
@@ -135,14 +158,15 @@ class PostgreSQLNetworkTester:
 
                 if self.test_single_connection(host, username, password):
                     print("✓ 成功")
-                    successful_logins.append((host, username, password))
+                    version = self.get_mysql_version(host, username, password)
+                    successful_logins.append((host, username, password, version))
                     host_success = True
                     break  # 找到成功的凭据后停止
                 else:
                     print("✗ 失败")
 
                 # 添加延迟以避免过于频繁的尝试
-                time.sleep(0.1)
+                time.sleep(0.2)
 
             if not host_success:
                 print(f"  主机 {host} 没有找到有效凭据")
@@ -184,13 +208,19 @@ class PostgreSQLNetworkTester:
 
 
 def main():
-    print("PostgreSQL 网络服务发现和连接测试工具")
+    print("MySQL 网络服务发现和连接测试工具")
     print("=" * 60)
     print("重要提醒:")
     print("- 请确保你有权限扫描目标网络")
     print("- 此工具仅用于合法的网络管理和安全审计")
     print("- 未经授权的网络扫描可能违法")
     print("=" * 60)
+
+    # 确认继续
+    response = input("确认你有权限扫描目标网络? (y/N): ")
+    if response.lower() != 'y':
+        print("已取消扫描")
+        return
 
     # 配置扫描参数
     targets = [
@@ -212,8 +242,8 @@ def main():
         return
 
     # 创建扫描器
-    scanner = PostgreSQLNetworkTester(
-        port=5432,
+    scanner = MySQLNetworkTester(
+        port=3306,
         timeout=3,
         max_threads=50
     )
@@ -227,7 +257,7 @@ def main():
         print("没有有效的主机地址")
         return
 
-    # 扫描PostgreSQL服务
+    # 扫描MySQL服务
     print("\n=== 第1步: 服务发现 ===")
     found_hosts = []
 
@@ -240,12 +270,12 @@ def main():
                 found_hosts.append(host)
 
     if not found_hosts:
-        print("没有发现PostgreSQL服务")
+        print("没有发现MySQL服务")
         return
 
-    print(f"\n发现 {len(found_hosts)} 个PostgreSQL服务:")
+    print(f"\n发现 {len(found_hosts)} 个MySQL服务:")
     for host in found_hosts:
-        print(f"  - {host}:5432")
+        print(f"  - {host}:3306")
 
     # 询问是否进行认证测试
     response = input(f"\n是否测试这些服务的认证? (y/N): ")
@@ -271,12 +301,12 @@ def main():
         passwords = scanner.load_password_dictionary(dict_file)
         if not passwords:
             print("使用内置密码作为备选")
-            passwords = ["postgres", "password", "123456", "", "admin", "root", "user", "test"]
+            passwords = ["", "root", "password", "123456", "admin", "mysql", "test", "toor", "pass"]
     else:
-        passwords = ["postgres", "password", "123456", "", "admin", "root", "user", "test"]
+        passwords = ["", "root", "password", "123456", "admin", "mysql", "test", "toor", "pass"]
 
-    # 用户名列表
-    usernames = ["postgres", "admin", "root", "user", "test"]
+    # MySQL常见用户名
+    usernames = ["root", "admin", "mysql", "user", "test", "guest", "db", "database"]
 
     # 生成凭据组合
     test_credentials = scanner.generate_credential_combinations(usernames, passwords)
@@ -285,7 +315,7 @@ def main():
     print(f"总共 {len(test_credentials)} 个凭据组合")
 
     # 安全限制
-    max_attempts = 1000  # 每个主机最多尝试20个凭据
+    max_attempts = 1000  # 每个主机最多尝试15个凭据
     if len(test_credentials) > max_attempts:
         print(f"为了防止滥用，每个主机最多只会尝试前 {max_attempts} 个凭据")
 
@@ -305,8 +335,8 @@ def main():
 
     if successful_logins:
         print("\n成功的登录凭据:")
-        for host, username, password in successful_logins:
-            print(f"  {host} - {username}:{password}")
+        for host, username, password, version in successful_logins:
+            print(f"  {host} - {username}:{password} (MySQL {version})")
 
     print("\n扫描完成!")
 
@@ -314,10 +344,10 @@ def main():
 if __name__ == "__main__":
     # 检查依赖
     try:
-        import psycopg2
+        import mysql.connector
     except ImportError:
-        print("错误: 需要安装 psycopg2 库")
-        print("请运行: pip install psycopg2-binary")
+        print("错误: 需要安装 mysql-connector-python 库")
+        print("请运行: pip install mysql-connector-python")
         sys.exit(1)
 
     main()
