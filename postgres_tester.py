@@ -276,7 +276,7 @@ def main():
         passwords = ["postgres", "password", "123456", "", "admin", "root", "user", "test"]
 
     # 用户名列表
-    usernames = ["postgres", "admin", "root", "user", "test"]
+    usernames = ["postgres", "admin", "root", "codvision", "user", "test"]
 
     # 生成凭据组合
     test_credentials = scanner.generate_credential_combinations(usernames, passwords)

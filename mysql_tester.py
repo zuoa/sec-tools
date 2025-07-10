@@ -306,7 +306,7 @@ def main():
         passwords = ["", "root", "password", "123456", "admin", "mysql", "test", "toor", "pass"]
 
     # MySQL常见用户名
-    usernames = ["root", "admin", "mysql", "user", "test", "guest", "db", "database"]
+    usernames = ["root", "admin", "mysql", "codvision", "user", "test", "guest", "db", "database"]
 
     # 生成凭据组合
     test_credentials = scanner.generate_credential_combinations(usernames, passwords)
